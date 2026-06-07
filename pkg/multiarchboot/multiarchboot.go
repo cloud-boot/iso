@@ -105,12 +105,31 @@ func DefaultArches() []Arch {
 				// Two pflash drives (code RO + vars RW) — tamago's
 				// amd64 board package needs a writable vars store
 				// for the OVMF Bds path to reach our app cleanly.
+				//
+				// -nic none is load-bearing: OVMF's default BootOrder
+				// lists the PXE NIC ahead of removable media, so
+				// without it BdsDxe spends the whole per-arch timeout
+				// in "Start PXE over IPv4/IPv6" before it ever falls
+				// back to \EFI\BOOT\BOOTX64.EFI on the CD, and the
+				// boot test times out. Removing the NIC makes the
+				// removable-media fallback the first bootable option,
+				// so the image launches in ~1s. The other three arches
+				// boot via -bios (fresh BDS enumeration, no persisted
+				// PXE-first BootOrder) and don't need this.
 				return []string{
 					"-machine", "q35", "-cpu", "max", "-m", "2048",
-					"-display", "none", "-no-reboot",
+					"-display", "none", "-no-reboot", "-nic", "none",
 					"-drive", "if=pflash,format=raw,readonly=on,file=" + code,
 					"-drive", "if=pflash,format=raw,file=" + vars,
-					"-cdrom", iso,
+					// readonly=on is load-bearing: the ISO is immutable
+					// boot media and all arches open the same file. A
+					// default read-write open takes an exclusive host
+					// lock, so the four per-arch QEMUs (run concurrently)
+					// collide with "Failed to get write lock". readonly=on
+					// takes a shared lock instead — boot media is never
+					// written anyway.
+					"-drive", "file=" + iso + ",format=raw,if=none,id=cd,readonly=on,media=cdrom",
+					"-device", "ide-cd,drive=cd",
 				}
 			},
 			CodeFWEnv:   "CLOUDBOOT_OVMF_AMD64_CODE",
@@ -131,7 +150,7 @@ func DefaultArches() []Arch {
 					"-machine", "virt", "-cpu", "max", "-m", "4096",
 					"-display", "none", "-no-reboot",
 					"-bios", code,
-					"-drive", "format=raw,file=" + iso + ",if=none,id=cd",
+					"-drive", "format=raw,file=" + iso + ",if=none,id=cd,readonly=on",
 					"-device", "virtio-blk-pci,drive=cd",
 				}
 			},
@@ -148,7 +167,7 @@ func DefaultArches() []Arch {
 					"-machine", "virt", "-cpu", "max", "-m", "4096",
 					"-display", "none", "-no-reboot",
 					"-bios", code,
-					"-drive", "format=raw,file=" + iso + ",if=none,id=cd",
+					"-drive", "format=raw,file=" + iso + ",if=none,id=cd,readonly=on",
 					"-device", "virtio-blk-pci,drive=cd",
 				}
 			},
@@ -171,7 +190,7 @@ func DefaultArches() []Arch {
 					"-display", "none", "-no-reboot",
 					"-drive", "if=pflash,format=raw,unit=0,file=" + code,
 					"-drive", "if=pflash,format=raw,unit=1,file=" + vars,
-					"-drive", "format=raw,file=" + iso + ",if=none,id=cd",
+					"-drive", "format=raw,file=" + iso + ",if=none,id=cd,readonly=on",
 					"-device", "virtio-blk-device,drive=cd",
 				}
 			},
@@ -308,7 +327,7 @@ func runOne(ctx context.Context, iso string, timeout time.Duration, a Arch, logf
 	logf("[%s] %s %s", a.Name, a.QEMUBin, strings.Join(args, " "))
 
 	start := time.Now()
-	stdout, exitErr := runWithTimeout(ctx, timeout, a.QEMUBin, args)
+	stdout, exitErr := runWithTimeout(ctx, timeout, a.QEMUBin, args, a.WantSubstrs)
 	r.Elapsed = time.Since(start)
 	r.Stdout = stdout
 
@@ -344,7 +363,17 @@ func runOne(ctx context.Context, iso string, timeout time.Duration, a Arch, logf
 // `timeout` elapses. The captured bytes are returned even when the
 // timeout fires (that's the whole point — partial serial output is
 // the first failure signal).
-func runWithTimeout(parent context.Context, timeout time.Duration, bin string, args []string) (string, error) {
+//
+// If `want` is non-empty, the child is killed early — as soon as every
+// substring in `want` has appeared in the captured stream. A booted
+// tamago-uefi guest halts in a `for {}` spin loop right after printing
+// its banner and never exits on its own, so without early-kill every
+// arch would burn the full `timeout` (four arches * 60-90s blows the
+// suite's total cap). With it, a clean boot returns in a few seconds.
+// Early-kill is success-neutral: the caller's substring check remains
+// the sole PASS/FAIL arbiter, and an ExpectFail arch that matches is
+// still flagged by the caller.
+func runWithTimeout(parent context.Context, timeout time.Duration, bin string, args []string, want []string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -382,10 +411,15 @@ func runWithTimeout(parent context.Context, timeout time.Duration, bin string, a
 			if n > 0 {
 				mu.Lock()
 				buf.Write(buf2[:n])
+				matched := len(want) > 0 && containsAll(buf.String(), want)
 				mu.Unlock()
-			}
-			if err == io.EOF {
-				return
+				if matched {
+					// Every required marker seen; the guest will now
+					// spin forever. Cancel the context to SIGKILL QEMU
+					// and return promptly instead of waiting out the
+					// full timeout.
+					cancel()
+				}
 			}
 			if err != nil {
 				return
@@ -396,6 +430,16 @@ func runWithTimeout(parent context.Context, timeout time.Duration, bin string, a
 	waitErr := cmd.Wait()
 	wg.Wait()
 	return buf.String(), waitErr
+}
+
+// containsAll reports whether s contains every substring in subs.
+func containsAll(s string, subs []string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
 }
 
 // copyToTemp duplicates src into a fresh tempfile named with the

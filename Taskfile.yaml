@@ -109,12 +109,17 @@ tasks:
       MULTI_ISO: '{{.MULTI_ISO | default "boot-multi.iso"}}'
       QEMU_EDK2_DIR: '{{.QEMU_EDK2_DIR | default "/opt/homebrew/Cellar/qemu/10.2.2/share/qemu"}}'
       BOOT_TIMEOUT: '{{.BOOT_TIMEOUT | default "60s"}}'
-      OVMF_AMD64_CODE:   '{{.OVMF_AMD64_CODE   | default "{{.QEMU_EDK2_DIR}}/edk2-x86_64-code.fd"}}'
-      OVMF_AMD64_VARS:   '{{.OVMF_AMD64_VARS   | default "{{.QEMU_EDK2_DIR}}/edk2-i386-vars.fd"}}'
-      OVMF_ARM64_CODE:   '{{.OVMF_ARM64_CODE   | default "{{.QEMU_EDK2_DIR}}/edk2-aarch64-code.fd"}}'
-      OVMF_LOONG64_CODE: '{{.OVMF_LOONG64_CODE | default "{{.QEMU_EDK2_DIR}}/edk2-loongarch64-code.fd"}}'
-      OVMF_RISCV64_CODE: '{{.OVMF_RISCV64_CODE | default "{{.QEMU_EDK2_DIR}}/edk2-riscv-code.fd"}}'
-      OVMF_RISCV64_VARS: '{{.OVMF_RISCV64_VARS | default "{{.QEMU_EDK2_DIR}}/edk2-riscv-vars.fd"}}'
+      # NOTE: a default value cannot itself contain a nested
+      # `{{.QEMU_EDK2_DIR}}` — go-task does not re-template the literal
+      # passed to `default`, so it would reach the test verbatim and
+      # every arch would skip on a bogus path. Build the path with the
+      # template `printf` instead, which evaluates .QEMU_EDK2_DIR.
+      OVMF_AMD64_CODE:   '{{.OVMF_AMD64_CODE   | default (printf "%s/edk2-x86_64-code.fd" .QEMU_EDK2_DIR)}}'
+      OVMF_AMD64_VARS:   '{{.OVMF_AMD64_VARS   | default (printf "%s/edk2-i386-vars.fd" .QEMU_EDK2_DIR)}}'
+      OVMF_ARM64_CODE:   '{{.OVMF_ARM64_CODE   | default (printf "%s/edk2-aarch64-code.fd" .QEMU_EDK2_DIR)}}'
+      OVMF_LOONG64_CODE: '{{.OVMF_LOONG64_CODE | default (printf "%s/edk2-loongarch64-code.fd" .QEMU_EDK2_DIR)}}'
+      OVMF_RISCV64_CODE: '{{.OVMF_RISCV64_CODE | default (printf "%s/edk2-riscv-code.fd" .QEMU_EDK2_DIR)}}'
+      OVMF_RISCV64_VARS: '{{.OVMF_RISCV64_VARS | default (printf "%s/edk2-riscv-vars.fd" .QEMU_EDK2_DIR)}}'
     preconditions:
       - sh: 'test -f "{{.MULTI_ISO}}"'
         msg: 'multi-arch ISO not found at {{.MULTI_ISO}} (run "task iso:multiarch" first)'
@@ -127,6 +132,12 @@ tasks:
       CLOUDBOOT_OVMF_RISCV64_CODE: '{{.OVMF_RISCV64_CODE}}'
       CLOUDBOOT_OVMF_RISCV64_VARS: '{{.OVMF_RISCV64_VARS}}'
       CLOUDBOOT_BOOT_TIMEOUT: '{{.BOOT_TIMEOUT}}'
+      # The multiarchboot package lives in this module, but a parent
+      # go.work spanning the cloud-boot repos does not list it, so a
+      # bare `go test` fails with "directory prefix ... does not
+      # contain modules listed in go.work". Pin GOWORK=off so the test
+      # resolves against this module regardless of the ambient go.work.
+      GOWORK: 'off'
     cmds:
       # `go test -v` so the per-arch status table + the captured serial
       # banner on failure land in the operator's terminal. 6m total cap

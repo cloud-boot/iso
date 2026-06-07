@@ -209,6 +209,7 @@ func TestRunWithTimeout_CapturesOutputAndKillsOnTimeout(t *testing.T) {
 		context.Background(),
 		800*time.Millisecond,
 		"sh", []string{"-c", "echo HELLO-FROM-MOCK; sleep 30"},
+		nil, // no want-substrings: must run to the timeout, not early-exit
 	)
 	if !strings.Contains(stdout, "HELLO-FROM-MOCK") {
 		t.Errorf("stdout missing banner; got %q", stdout)
@@ -226,6 +227,7 @@ func TestRunWithTimeout_CleanExitReturnsNoError(t *testing.T) {
 		context.Background(),
 		5*time.Second,
 		"sh", []string{"-c", "echo clean-line; exit 0"},
+		nil,
 	)
 	if err != nil {
 		t.Errorf("err=%v, want nil", err)
@@ -241,10 +243,45 @@ func TestRunWithTimeout_PropagatesStartError(t *testing.T) {
 	_, err := runWithTimeout(
 		context.Background(),
 		time.Second,
-		"/does/not/exist/no-such-binary-2026", nil,
+		"/does/not/exist/no-such-binary-2026", nil, nil,
 	)
 	if err == nil {
 		t.Fatalf("err was nil; want a start error")
+	}
+}
+
+// TestRunWithTimeout_EarlyExitOnMatch covers the want-substring
+// early-kill path: a child that prints the markers and then sleeps far
+// past the deadline must be killed as soon as every marker is seen, so
+// the call returns well before the timeout would fire.
+func TestRunWithTimeout_EarlyExitOnMatch(t *testing.T) {
+	start := time.Now()
+	stdout, _ := runWithTimeout(
+		context.Background(),
+		30*time.Second, // generous; must NOT be reached
+		"sh", []string{"-c", "echo marker-one; echo marker-two; sleep 25"},
+		[]string{"marker-one", "marker-two"},
+	)
+	elapsed := time.Since(start)
+	if !strings.Contains(stdout, "marker-two") {
+		t.Errorf("stdout missing markers; got %q", stdout)
+	}
+	if elapsed > 10*time.Second {
+		t.Errorf("did not early-exit on match: took %s (want < 10s)", elapsed)
+	}
+}
+
+// TestContainsAll spot-checks the AND-semantics helper.
+func TestContainsAll(t *testing.T) {
+	const s = "hello from cloud-boot tamago/amd64\ngoroutine sum: 499500\nDONE"
+	if !containsAll(s, []string{"tamago/amd64", "499500", "DONE"}) {
+		t.Errorf("containsAll: expected all present")
+	}
+	if containsAll(s, []string{"DONE", "tamago/arm64"}) {
+		t.Errorf("containsAll: arm64 substring should be absent")
+	}
+	if !containsAll(s, nil) {
+		t.Errorf("containsAll(nil): empty want set is vacuously true")
 	}
 }
 

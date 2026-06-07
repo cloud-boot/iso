@@ -1,0 +1,18 @@
+# Build artefacts.
+bin/
+
+# Generated ISOs.
+*.iso
+*.img
+
+# OVMF/EDK2 writable vars store snapshots used by the boot harness.
+.ovmf_vars*.fd
+
+# Go test outputs.
+*.test
+coverage.out
+coverage.html
+cover.out
+
+# Taskfile run-state.
+.task/

@@ -194,8 +194,8 @@ func DefaultArches() []Arch {
 					"-device", "virtio-blk-device,drive=cd",
 				}
 			},
-			CodeFWEnv:   "CLOUDBOOT_OVMF_RISCV64_CODE",
-			VarsFWEnv:   "CLOUDBOOT_OVMF_RISCV64_VARS",
+			CodeFWEnv: "CLOUDBOOT_OVMF_RISCV64_CODE",
+			VarsFWEnv: "CLOUDBOOT_OVMF_RISCV64_VARS",
 			// Match the goroutine smoke-test substrings only —
 			// tamago-uefi's riscv64 build currently bakes
 			// GOARCH=amd64 into its banner string at compile time
